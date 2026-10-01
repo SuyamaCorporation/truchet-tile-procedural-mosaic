@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Truchet Tile Procedural Mosaic</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-white min-h-screen flex flex-col items-center p-3">
+<h1 class="text-2xl font-bold text-teal-400 text-center mb-1">Truchet Tile Procedural Mosaic</h1>
+<p class="text-center text-gray-400 text-xs mb-3">Each tile shows one of two quarter-circle arc orientations. Hover cells to rotate them.</p>
+
+<!-- Controls -->
+<div class="bg-gray-800 rounded-xl p-3 mb-3 w-full max-w-2xl flex flex-wrap gap-3 justify-center items-end">
+  <div>
+    <label class="text-xs text-gray-400 block mb-1">Seed: </label>
+    <input type="number" id="seedInput" value="42" min="1" max="9999" class="w-20 bg-gray-700 rounded px-2 py-1 text-sm text-white" aria-label="Random seed">
+  </div>
+  <div>
+    <label class="text-xs text-gray-400 block mb-1">Grid: <span id="gridLabel">20×16</span></label>
+    <input type="range" id="gridSlider" min="10" max="40" value="20" class="w-28 accent-teal-400" aria-label="Grid size">
+  </div>
+  <div>
+    <label class="text-xs text-gray-400 block mb-1">Theme</label>
+    <select id="themeSelect" class="bg-gray-700 rounded px-2 py-1 text-sm" aria-label="Color theme">
+      <option value="mono">Monochrome</option>
+      <option value="duo">Duo-tone</option>
+      <option value="rainbow">Rainbow</option>
+      <option value="pastel">Pastels</option>
+    </select>
+  </div>
+  <button id="regenBtn" aria-label="Regenerate mosaic" class="px-4 py-2 bg-teal-700 hover:bg-teal-600 rounded-lg font-semibold text-sm transition">Regenerate</button>
+  <button id="exportBtn" aria-label="Export mosaic as PNG" class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm transition">Export PNG</button>
+  <div id="exportMsg" class="text-xs text-green-400 hidden self-center">Saved!</div>
+</div>
+
+<canvas id="truchCanvas" width="800" height="600" class="rounded-xl shadow-xl max-w-full cursor-pointer" aria-label="Truchet tile mosaic canvas - hover to rotate tiles"></canvas>
+
+<script>
+const canvas = document.getElementById('truchCanvas');
+const ctx = canvas.getContext('2d');
+const CW = canvas.width, CH = canvas.height;
+
+let gridCols = 20, gridRows = 16;
+let seed = 42;
+let theme = 'mono';
+let tiles = []; // 2D array of {type:0|1, rotation:0|1|2|3}
+let cellW, cellH;
+let hoveredTile = null;
+
+// Seeded PRNG
+function mulberry32(s) {
+  return function() {
+    s |= 0; s = s + 0x6D2B79F5 | 0;
+    let t = Math.imul(s ^ s >>> 15, 1 | s);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function getThemeColors(i, j, total) {
+  switch(theme) {
+    case 'mono': return { bg:'#1a1a1a', fg:'#f0f0f0', arc:'#f0f0f0' };
+    case 'duo': return { bg:'#1e3a5f', fg:'#f97316', arc:'#38bdf8' };
+    case 'rainbow': {
+      const h = (i*gridRows+j)/total*360;
+      return { bg:`hsl(${h},70%,15%)`, fg:`hsl(${h},80%,65%)`, arc:`hsl(${(h+120)%360},80%,65%)` };
+    }
+    case 'pastel': {
+      const h = (i*gridRows+j)/total*360;
+      return { bg:`hsl(${h},30%,20%)`, fg:`hsl(${h},60%,80%)`, arc:`hsl(${(h+60)%360},50%,80%)` };
+    }
+  }
+}
+
+function generateTiles() {
+  const rng = mulberry32(seed);
+  cellW = CW / gridCols;
+  cellH = CH / gridRows;
+  tiles = [];
+  for(let i=0;i<gridCols;i++) {
+    tiles[i]=[];
+    for(let j=0;j<gridRows;j++) {
+      tiles[i][j] = { type: rng()<0.5?0:1, rotation:0 };
+    }
+  }
+}
+
+function drawTile(i, j, extra=0) {
+  const x = i*cellW, y = j*cellH;
+  const r = Math.min(cellW, cellH)/2;
+  const total = gridCols*gridRows;
+  const c = getThemeColors(i,j,total);
+  const tile = tiles[i][j];
+
+  // Background
+  ctx.fillStyle = c.bg;
+  ctx.fillRect(x,y,cellW,cellH);
+
+  // Truchet tile: type 0 = arcs at top-left and bottom-right corners
+  //               type 1 = arcs at top-right and bottom-left corners
+  ctx.strokeStyle = c.fg;
+  ctx.lineWidth = Math.max(1.5, cellW*0.12);
+  ctx.lineCap = 'round';
+
+  const rot = (tile.rotation + extra) % 4;
+  const type = tile.type;
+
+  // Rotate by modifying which corners get arcs
+  // Type 0: corners (0=TL,2=BR) | Type 1: corners (1=TR,3=BL)
+  // Rotation swaps type effectively
+  const effectiveType = (type + rot) % 2;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x,y,cellW,cellH);
+  ctx.clip();
+
+  if(effectiveType === 0) {
+    // Arc at top-left corner
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI/2);
+    ctx.stroke();
+    // Arc at bottom-right corner
+    ctx.beginPath();
+    ctx.arc(x+cellW, y+cellH, r, Math.PI, Math.PI*1.5);
+    ctx.stroke();
+  } else {
+    // Arc at top-right corner
+    ctx.beginPath();
+    ctx.arc(x+cellW, y, r, Math.PI/2, Math.PI);
+    ctx.stroke();
+    // Arc at bottom-left corner
+    ctx.beginPath();
+    ctx.arc(x, y+cellH, r, -Math.PI/2, 0);
+    ctx.stroke();
+  }
+
+  // Hover highlight
+  if(hoveredTile && hoveredTile[0]===i && hoveredTile[1]===j) {
+    ctx.fillStyle='rgba(20,184,166,0.15)';
+    ctx.fillRect(x,y,cellW,cellH);
+    ctx.strokeStyle='#14b8a6';
+    ctx.lineWidth=1.5;
+    ctx.strokeRect(x,y,cellW,cellH);
+  }
+  ctx.restore();
+}
+
+function drawAll() {
+  ctx.clearRect(0,0,CW,CH);
+  for(let i=0;i<gridCols;i++) {
+    for(let j=0;j<gridRows;j++) {
+      drawTile(i,j);
+    }
+  }
+}
+
+function regen() {
+  seed = parseInt(document.getElementById('seedInput').value) || Math.floor(Math.random()*9999);
+  document.getElementById('seedInput').value = seed;
+  generateTiles();
+  drawAll();
+}
+
+document.getElementById('gridSlider').addEventListener('input', e => {
+  gridCols = parseInt(e.target.value);
+  gridRows = Math.round(gridCols * 0.75);
+  document.getElementById('gridLabel').textContent = gridCols+'×'+gridRows;
+  regen();
+});
+document.getElementById('themeSelect').addEventListener('change', e => { theme=e.target.value; drawAll(); });
+document.getElementById('regenBtn').addEventListener('click', () => {
+  seed = Math.floor(Math.random()*9999);
+  document.getElementById('seedInput').value=seed;
+  generateTiles(); drawAll();
+});
+document.getElementById('seedInput').addEventListener('change', regen);
+
+// Hover to rotate
+canvas.addEventListener('mousemove', (e) => {
+  const rect=canvas.getBoundingClientRect();
+  const scaleX=CW/rect.width, scaleY=CH/rect.height;
+  const mx=(e.clientX-rect.left)*scaleX;
+  const my=(e.clientY-rect.top)*scaleY;
+  const ci=Math.floor(mx/cellW), cj=Math.floor(my/cellH);
+  if(ci>=0&&ci<gridCols&&cj>=0&&cj<gridRows) {
+    if(!hoveredTile||hoveredTile[0]!==ci||hoveredTile[1]!==cj) {
+      // Redraw previous hovered
+      if(hoveredTile) drawTile(hoveredTile[0],hoveredTile[1]);
+      hoveredTile=[ci,cj];
+      drawTile(ci,cj);
+    }
+  } else {
+    if(hoveredTile) { drawTile(hoveredTile[0],hoveredTile[1]); hoveredTile=null; }
+  }
+});
+
+canvas.addEventListener('click', (e) => {
+  const rect=canvas.getBoundingClientRect();
+  const scaleX=CW/rect.width, scaleY=CH/rect.height;
+  const mx=(e.clientX-rect.left)*scaleX;
+  const my=(e.clientY-rect.top)*scaleY;
+  const ci=Math.floor(mx/cellW), cj=Math.floor(my/cellH);
+  if(ci>=0&&ci<gridCols&&cj>=0&&cj<gridRows) {
+    tiles[ci][cj].rotation=(tiles[ci][cj].rotation+1)%4;
+    drawTile(ci,cj);
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  if(hoveredTile) { drawTile(hoveredTile[0],hoveredTile[1]); hoveredTile=null; }
+});
+
+document.getElementById('exportBtn').addEventListener('click', () => {
+  canvas.toBlob(blob => {
+    if(navigator.clipboard && window.ClipboardItem) {
+      navigator.clipboard.write([new ClipboardItem({'image/png':blob})]).then(() => {
+        const msg=document.getElementById('exportMsg');
+        msg.classList.remove('hidden');
+        setTimeout(()=>msg.classList.add('hidden'),2000);
+      }).catch(()=>{
+        const a=document.createElement('a'); a.href=canvas.toDataURL(); a.download='truchet.png'; a.click();
+      });
+    } else {
+      const a=document.createElement('a'); a.href=canvas.toDataURL(); a.download='truchet.png'; a.click();
+    }
+  });
+});
+
+// Init
+generateTiles();
+drawAll();
+</script>
+</body>
+</html>
